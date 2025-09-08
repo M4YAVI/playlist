@@ -26,7 +26,7 @@ export default function PlayerPage() {
   const audioRef = useRef<HTMLAudioElement>(null);
 
   // Player state
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false); // Will be set to true on mount
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(1);
@@ -45,6 +45,11 @@ export default function PlayerPage() {
   );
 
   const currentSong = playlist[currentSongIndex];
+
+  // Start playing automatically on load
+  useEffect(() => {
+    setIsPlaying(true);
+  }, []);
 
   useEffect(() => {
     // Parse URL parameters to get playlist and mode
@@ -74,31 +79,54 @@ export default function PlayerPage() {
     } else {
       setSubtitles([]);
     }
+    // Reset lyrics state for new song
+    setCurrentSubtitle(null);
   }, [currentSong]);
 
   const handleNext = useCallback(() => {
+    if (playlist.length === 0) return;
     if (isRandom) {
-      const randomIndex = Math.floor(Math.random() * playlist.length);
-      setCurrentSongIndex(randomIndex);
+      // Avoid playing the same song twice in a row in random mode
+      let nextIndex;
+      do {
+        nextIndex = Math.floor(Math.random() * playlist.length);
+      } while (playlist.length > 1 && nextIndex === currentSongIndex);
+      setCurrentSongIndex(nextIndex);
+    } else {
+      setCurrentSongIndex((prevIndex) => (prevIndex + 1) % playlist.length);
+    }
+  }, [isRandom, playlist.length, currentSongIndex]);
+
+  const handlePrevious = useCallback(() => {
+    if (currentTime > 3 && audioRef.current) {
+      audioRef.current.currentTime = 0;
     } else {
       setCurrentSongIndex((prevIndex) =>
-        prevIndex < playlist.length - 1 ? prevIndex + 1 : 0
+        prevIndex === 0 ? playlist.length - 1 : prevIndex - 1
       );
     }
-    setCurrentTime(0);
-  }, [isRandom, playlist.length]);
+  }, [currentTime, playlist.length]);
 
+  // Sync audio element with isPlaying state
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying) {
+      audio.play().catch(() => setIsPlaying(false)); // If play fails, update state
+    } else {
+      audio.pause();
+    }
+  }, [isPlaying, currentSong]);
+
+  // Setup audio event listeners
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
 
     const updateTime = () => setCurrentTime(audio.currentTime);
-    const updateDuration = () => {
-      if (audio.duration && !isNaN(audio.duration)) {
-        setDuration(audio.duration);
-      }
-    };
-    const handleEnded = () => {
+    const updateDuration = () => setDuration(audio.duration || 0);
+    const onEnded = () => {
       if (isLooping) {
         audio.currentTime = 0;
         audio.play();
@@ -109,43 +137,22 @@ export default function PlayerPage() {
 
     audio.addEventListener('timeupdate', updateTime);
     audio.addEventListener('loadedmetadata', updateDuration);
-    audio.addEventListener('ended', handleEnded);
-
-    // Autoplay when the song changes, if the player was already playing.
-    if (isPlaying) {
-      audio.play().catch((e) => console.error('Autoplay failed:', e));
-    }
+    audio.addEventListener('ended', onEnded);
 
     return () => {
       audio.removeEventListener('timeupdate', updateTime);
       audio.removeEventListener('loadedmetadata', updateDuration);
-      audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('ended', onEnded);
     };
-  }, [currentSong, isLooping, isPlaying, handleNext]);
+  }, [currentSong, isLooping, handleNext]);
 
+  // Effect for updating lyrics based on currentTime
   useEffect(() => {
     if (subtitles.length > 0) {
       const subtitle = getCurrentSubtitle(subtitles, currentTime);
       setCurrentSubtitle(subtitle);
     }
   }, [currentTime, subtitles]);
-
-  const handlePrevious = useCallback(() => {
-    if (currentTime > 3) {
-      // If more than 3 seconds in, restart current song
-      const audio = audioRef.current;
-      if (audio) {
-        audio.currentTime = 0;
-        setCurrentTime(0);
-      }
-    } else {
-      // Go to previous song
-      setCurrentSongIndex((prevIndex) =>
-        prevIndex > 0 ? prevIndex - 1 : playlist.length - 1
-      );
-      setCurrentTime(0);
-    }
-  }, [currentTime, playlist.length]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -168,10 +175,8 @@ export default function PlayerPage() {
         case 'ArrowLeft':
           event.preventDefault();
           if (event.shiftKey) {
-            // Shift + Left Arrow: Previous song
             handlePrevious();
           } else {
-            // Left Arrow: Seek backward 10 seconds
             const newTime = Math.max(0, currentTime - 10);
             audio.currentTime = newTime;
             setCurrentTime(newTime);
@@ -180,10 +185,8 @@ export default function PlayerPage() {
         case 'ArrowRight':
           event.preventDefault();
           if (event.shiftKey) {
-            // Shift + Right Arrow: Next song
             handleNext();
           } else {
-            // Right Arrow: Seek forward 10 seconds
             const newTime = Math.min(duration, currentTime + 10);
             audio.currentTime = newTime;
             setCurrentTime(newTime);
@@ -191,7 +194,6 @@ export default function PlayerPage() {
           break;
         case 'ArrowUp':
           event.preventDefault();
-          // Arrow Up: Increase volume
           const newVolumeUp = Math.min(1, volume + 0.1);
           audio.volume = newVolumeUp;
           setVolume(newVolumeUp);
@@ -199,7 +201,6 @@ export default function PlayerPage() {
           break;
         case 'ArrowDown':
           event.preventDefault();
-          // Arrow Down: Decrease volume
           const newVolumeDown = Math.max(0, volume - 0.1);
           audio.volume = newVolumeDown;
           setVolume(newVolumeDown);
@@ -243,15 +244,7 @@ export default function PlayerPage() {
   ]);
 
   function togglePlay() {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    if (isPlaying) {
-      audio.pause();
-    } else {
-      audio.play();
-    }
-    setIsPlaying(!isPlaying);
+    setIsPlaying((prev) => !prev);
   }
 
   function handleSeek(value: number[]) {
@@ -521,10 +514,9 @@ export default function PlayerPage() {
 
       {/* Audio Element */}
       <audio
+        key={currentSong.id}
         ref={audioRef}
         src={currentSong.audio_url}
-        onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
         preload="metadata"
       />
     </div>
